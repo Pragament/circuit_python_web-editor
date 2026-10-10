@@ -1,6 +1,6 @@
 import { basicSetup } from "codemirror";
 import { EditorView, keymap } from "@codemirror/view";
-import { EditorState, Compartment } from "@codemirror/state";
+import { EditorState, Compartment, Prec } from "@codemirror/state";
 import { indentWithTab } from "@codemirror/commands"
 import { python } from "@codemirror/lang-python";
 import { json } from "@codemirror/lang-json";
@@ -68,6 +68,45 @@ const discardDialog = new ButtonValueDialog('ok-cancel');
 let blocksEditor = null;
 let documentMode = 'python';
 let creatingFile = false;
+let pythonEditApproved = false;
+let pythonEditPrompt = null;
+const pythonPreviewBar = document.getElementById('python-preview-bar');
+const returnToBlockly = document.getElementById('return-to-blockly');
+const editGeneratedPython = document.getElementById('edit-generated-python');
+const pythonReadOnly = new Compartment();
+
+function refreshPythonPreview() {
+    pythonPreviewBar.hidden = documentMode !== 'python-preview';
+    editGeneratedPython.hidden = pythonEditApproved;
+    document.getElementById('python-preview-status').textContent = pythonEditApproved
+        ? 'Generated Python · editing enabled; Blockly available until your first change'
+        : 'Generated Python · read-only';
+    editor.dispatch({ effects: pythonReadOnly.reconfigure(EditorState.readOnly.of(
+        documentMode === 'python-preview' && !pythonEditApproved
+    )) });
+}
+
+async function requestPythonEdit() {
+    if (documentMode !== 'python-preview' || pythonEditApproved || pythonEditPrompt) return;
+    pythonEditPrompt = discardDialog.open('Switch to Python? You cannot switch this document back to Blockly. Download your blocks first if you want to keep them.');
+    try {
+        const confirmed = await pythonEditPrompt;
+        if (confirmed !== 'ok' || documentMode !== 'python-preview') return;
+        pythonEditApproved = true;
+        refreshPythonPreview();
+        editor.focus();
+    } finally { pythonEditPrompt = null; }
+}
+
+editGeneratedPython.addEventListener('click', requestPythonEdit);
+returnToBlockly.addEventListener('click', () => {
+    if (documentMode !== 'python-preview') return;
+    documentMode = 'blockly';
+    pythonEditApproved = false;
+    refreshPythonPreview();
+    document.querySelector('#editor').hidden = true;
+    blocksEditor.resume();
+});
 
 // localStorage key used to remember the most recently chosen backend
 // ("web" | "ble" | "usb"). When the user clicks Connect after a
@@ -332,13 +371,11 @@ async function newFile() {
                     setSaved(false);
                 },
                 onConvert: async () => {
-                    const confirmed = await discardDialog.open('Switch to Python? You cannot switch this document back to Blockly. Download your blocks first if you want to keep them.');
-                    if (confirmed !== 'ok') return;
-                    documentMode = 'python';
+                    documentMode = 'python-preview';
+                    pythonEditApproved = false;
                     blocksEditor.hide();
                     document.querySelector('#editor').hidden = false;
-                    unchanged = 0;
-                    setSaved(false);
+                    refreshPythonPreview();
                     editor.focus();
                 },
                 onRun: saveRunFile,
@@ -360,7 +397,7 @@ async function newFile() {
 }
 
 async function confirmReplaceDocument() {
-    if (documentMode === 'blockly') {
+    if (documentMode === 'blockly' || documentMode === 'python-preview') {
         return await discardDialog.open('Replace this Blockly project? Download your blocks to keep an editable copy; Save writes generated Python only.') === 'ok';
     }
     if (!isDirty()) return true;
@@ -369,7 +406,7 @@ async function confirmReplaceDocument() {
 }
 
 async function saveRunFile() {
-    if (documentMode === 'blockly') {
+    if (documentMode === 'blockly' || documentMode === 'python-preview') {
         try { blocksEditor.assertValidWiring(); }
         catch (error) { await showMessage(error.message); return; }
     }
@@ -631,13 +668,48 @@ const baseEditorExtensions = [
     indentUnit.of("    "),
     editorTheme,
     syntaxHighlighting(classHighlighter),
-    EditorView.updateListener.of(onTextChange)
+    EditorView.updateListener.of(onTextChange),
+    Prec.highest(EditorView.domEventHandlers({
+        keydown(event) {
+            if (documentMode !== 'python-preview' || pythonEditApproved) return false;
+            const character = event.key.length === 1 && ((!event.ctrlKey && !event.metaKey) || event.getModifierState('AltGraph'));
+            const commandEdit = (event.ctrlKey || event.metaKey) && ['x', 'v', 'z', 'y'].includes(event.key.toLowerCase());
+            if (!character && !commandEdit && !['Backspace', 'Delete', 'Enter'].includes(event.key)) return false;
+            event.preventDefault();
+            void requestPythonEdit();
+            return true;
+        },
+        beforeinput(event) {
+            if (documentMode !== 'python-preview' || pythonEditApproved || !/^(insert|delete|history)/.test(event.inputType)) return false;
+            event.preventDefault();
+            void requestPythonEdit();
+            return true;
+        },
+        paste(event) { return interceptPreviewEdit(event); },
+        cut(event) { return interceptPreviewEdit(event); },
+        drop(event) { return interceptPreviewEdit(event); },
+    })),
+    EditorState.transactionFilter.of(transaction => {
+        if (transaction.docChanged && documentMode === 'python-preview' && !pythonEditApproved) {
+            void requestPythonEdit();
+            return [];
+        }
+        return transaction;
+    }),
 ];
+
+function interceptPreviewEdit(event) {
+    if (documentMode !== 'python-preview' || pythonEditApproved) return false;
+    event.preventDefault();
+    void requestPythonEdit();
+    return true;
+}
 
 function buildEditorExtensions(path) {
     return [
         ...baseEditorExtensions,
         languageCompartment.of(languageExtensionsForPath(path)),
+        pythonReadOnly.of(EditorState.readOnly.of(false)),
     ];
 }
 
@@ -649,6 +721,8 @@ function isDirty() {
 
 function loadEditorContents(content, path = null) {
     documentMode = 'python';
+    pythonEditApproved = false;
+    pythonPreviewBar.hidden = true;
     blocksEditor?.hide();
     document.querySelector('#editor').hidden = false;
     editor.setState(EditorState.create({
@@ -700,7 +774,7 @@ function updateUIConnected(isConnected) {
 }
 
 window.onbeforeunload = () => {
-    if (isDirty() || (documentMode === 'blockly' && blocksEditor?.projectDirty)) {
+    if (isDirty() || ((documentMode === 'blockly' || documentMode === 'python-preview') && blocksEditor?.projectDirty)) {
         return "You have unsaved changed, exit anyways?";
     }
 };
@@ -755,7 +829,7 @@ function sleep(ms) {
 // a fire-and-forget setTimeout, which let Save+Run soft-restart the board
 // before the PUT had succeeded (issue #460).
 async function saveFileContents(path) {
-    if (documentMode === 'blockly') {
+    if (documentMode === 'blockly' || documentMode === 'python-preview') {
         try { blocksEditor.assertValidWiring(); }
         catch (error) { await showMessage(error.message); return false; }
     }
@@ -887,6 +961,10 @@ function loadFileContents(path, contents, saved = true) {
 async function onTextChange(update) {
     if (!update.docChanged) {
         return;
+    }
+    if (documentMode === 'python-preview' && !update.startState.doc.eq(update.state.doc)) {
+        documentMode = 'python';
+        pythonPreviewBar.hidden = true;
     }
 
     var hasGap = false;

@@ -37,7 +37,7 @@ export class BlocksEditor {
                 <button type="button" data-action="run">Run on ESP32</button>
                 <button type="button" data-action="download">Download blocks</button>
                 <button type="button" data-action="open">Open blocks</button>
-                <button type="button" data-action="python">Switch to Python</button>
+                <button type="button" data-action="python">View Python</button>
                 <input type="file" accept=".json" hidden aria-label="Open Blockly project">
             </div>
             <div class="blocks-body">
@@ -152,6 +152,10 @@ export class BlocksEditor {
         requestAnimationFrame(() => Blockly.svgResize(this.workspace));
     }
     hide() { this.stop(); this.panel.hidden = true; }
+    resume() {
+        this.panel.hidden = false;
+        requestAnimationFrame(() => Blockly.svgResize(this.workspace));
+    }
     update() {
         this.stop();
         this.assertValidWiring();
