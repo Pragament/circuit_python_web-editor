@@ -63,6 +63,11 @@ const serialPlotter = document.getElementById('plotter');
 const messageDialog = new MessageModal("message");
 const connectionType = new ButtonValueDialog("connection-type");
 const settings = new Settings();
+const newFileMode = new ButtonValueDialog('new-file-mode');
+const discardDialog = new ButtonValueDialog('ok-cancel');
+let blocksEditor = null;
+let documentMode = 'python';
+let creatingFile = false;
 
 // localStorage key used to remember the most recently chosen backend
 // ("web" | "ble" | "usb"). When the user clicks Connect after a
@@ -312,14 +317,62 @@ async function saveFile() {
 }
 
 async function newFile() {
-    if (await checkConnected()) {
-        if (await workflow.checkSaved()) {
-            loadFileContents(null, "");
+    if (creatingFile) return;
+    creatingFile = true;
+    try {
+        const mode = await newFileMode.open();
+        if (!mode || !await confirmReplaceDocument()) return;
+        if (mode === 'blockly' && !blocksEditor) {
+            const { BlocksEditor } = await import('./blockly/editor.js');
+            blocksEditor = new BlocksEditor({
+                onCode: code => {
+                    if (documentMode !== 'blockly') return;
+                    editor.dispatch({ changes: { from: 0, to: editor.state.doc.length, insert: code } });
+                    unchanged = 0;
+                    setSaved(false);
+                },
+                onConvert: async () => {
+                    const confirmed = await discardDialog.open('Switch to Python? You cannot switch this document back to Blockly. Download your blocks first if you want to keep them.');
+                    if (confirmed !== 'ok') return;
+                    documentMode = 'python';
+                    blocksEditor.hide();
+                    document.querySelector('#editor').hidden = false;
+                    unchanged = 0;
+                    setSaved(false);
+                    editor.focus();
+                },
+                onRun: saveRunFile,
+                confirmReplace: confirmReplaceDocument,
+            });
         }
+        loadFileContents(null, '', false);
+        if (mode === 'blockly') {
+            documentMode = 'blockly';
+            document.querySelector('#editor').hidden = true;
+            blocksEditor.start();
+        }
+    } catch (error) {
+        await showMessage('Could not create the document. Please try again.');
+        console.error(error);
+    } finally {
+        creatingFile = false;
     }
 }
 
+async function confirmReplaceDocument() {
+    if (documentMode === 'blockly') {
+        return await discardDialog.open('Replace this Blockly project? Download your blocks to keep an editable copy; Save writes generated Python only.') === 'ok';
+    }
+    if (!isDirty()) return true;
+    if (workflow?.connectionStatus()) return workflow.checkSaved();
+    return await discardDialog.open('Discard the unsaved document and create a new one?') === 'ok';
+}
+
 async function saveRunFile() {
+    if (documentMode === 'blockly') {
+        try { blocksEditor.assertValidWiring(); }
+        catch (error) { await showMessage(error.message); return; }
+    }
     if (await checkConnected()) {
         // workflow.saveFile() now propagates the real save result -- only
         // soft-restart / re-import once the PUT actually succeeded. Otherwise
@@ -373,7 +426,7 @@ async function checkConnected() {
         // BLE/USB/Web all behave the same way after a fresh connect.
     }
 
-    return true;
+    return Boolean(workflow?.connectionStatus());
 }
 
 // Closes whatever connect dialog is open and re-opens the workflow chooser,
@@ -595,6 +648,9 @@ function isDirty() {
 }
 
 function loadEditorContents(content, path = null) {
+    documentMode = 'python';
+    blocksEditor?.hide();
+    document.querySelector('#editor').hidden = false;
     editor.setState(EditorState.create({
         doc: content,
         extensions: buildEditorExtensions(path)
@@ -644,7 +700,7 @@ function updateUIConnected(isConnected) {
 }
 
 window.onbeforeunload = () => {
-    if (isDirty()) {
+    if (isDirty() || (documentMode === 'blockly' && blocksEditor?.projectDirty)) {
         return "You have unsaved changed, exit anyways?";
     }
 };
@@ -699,6 +755,10 @@ function sleep(ms) {
 // a fire-and-forget setTimeout, which let Save+Run soft-restart the board
 // before the PUT had succeeded (issue #460).
 async function saveFileContents(path) {
+    if (documentMode === 'blockly') {
+        try { blocksEditor.assertValidWiring(); }
+        catch (error) { await showMessage(error.message); return false; }
+    }
     if (saveInFlight) {
         // Re-entrant save (e.g. user mashing Ctrl-S / Save+Run). The first
         // call will report success/failure; the second would race the same
@@ -821,7 +881,7 @@ function loadFileContents(path, contents, saved = true) {
     if (saved !== null) {
         setSaved(saved);
     }
-    console.log("Current File Changed to: " + workflow.currentFilename);
+    console.log("Current File Changed to: " + (workflow?.currentFilename ?? '[New Document]'));
 }
 
 async function onTextChange(update) {
@@ -984,7 +1044,5 @@ document.addEventListener('DOMContentLoaded', async (event) => {
                 await workflow.showConnect(getDocState());
             }
         }
-    } else {
-        await checkConnected();
     }
 });

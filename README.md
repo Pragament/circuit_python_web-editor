@@ -56,3 +56,15 @@ Note: ChromeOS users cannot apply Options A or B and should rely on the editor's
 ## License
 
 This project is made available under the MIT License. For more details, see the LICENSE file in the repository.
+
+## Blockly and seven-segment lessons
+
+Click **New** and choose **Blockly blocks** or **Python**. New documents can be created without connecting a board. Blockly offers display digit, individual segment on/off, clear, wait, repeat, and forever blocks. The starter project blinks the digit 8.
+
+Use **Simulate** to run the blocks against the displayed ESP32 / breadboard / seven-segment circuit; **Stop** interrupts loops and waits. This is a digital, block-level simulator, not an ESP32 firmware emulator or analog circuit solver. Each segment, including the decimal point, has its own GPIO and series resistor. The default is a common-cathode display with 220 Ω resistors. GPIOs, resistor values, and common-anode/cathode polarity are editable. Verify GPIO availability against your actual ESP32 board; the defaults target classic ESP32 pin numbering and are not universal across ESP32 variants. The diagram shows segment names, not the physical pinout of a particular display package.
+
+**Download blocks** saves an editable `.blockly.json` project, including wiring. **Open blocks** restores that project in a Blockly document. **Switch to Python** keeps the generated code and permanently changes the current document to the text editor. There is no Python-to-Blockly conversion. Start a new Blockly document to load a previously downloaded blocks project.
+
+**Run on ESP32** uses the same connection, save, and run workflow as **Save + Run**. Install CircuitPython on a supported ESP32 board, connect over USB, WiFi, or Bluetooth as supported by the board, and save the generated code as `code.py` to run it. Generated programs use CircuitPython's `digitalio` and `microcontroller.pin.GPIO…` APIs. MicroPython is not supported by this integration. Saving to the board writes Python; download the blocks separately to preserve the editable project.
+
+Run `npm test` for Blockly serialization, Python generation, wiring validation, and simulator checks, and `npm run build` for the production bundle.

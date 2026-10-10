@@ -90,6 +90,7 @@
                         </ul>
                     </nav>
                 </div>
+                <div id="blocks-panel" hidden></div>
                 <div id="editor" tabindex="0"></div>
             </div>
             <div id="page-separator" class=""></div>
@@ -136,6 +137,14 @@
     </div>
 
     <!-- Dialog Box Templates -->
+    <div class="popup-modal shadow prompt closable" data-popup-modal="new-file-mode">
+        <div id="message">Choose how to code. Blockly can be converted to Python. Python cannot be converted back to Blockly.</div>
+        <div class="buttons stacked">
+            <button id="new-blockly" class="purple-button" value="blockly">Blockly blocks</button>
+            <button id="new-python" class="purple-button" value="python">Python</button>
+            <button class="purple-button cancel-button">Cancel</button>
+        </div>
+    </div>
     <div class="popup-modal shadow file-dialog closable" data-popup-modal="files">
         <div class="buttons">
             <button id="del-button" title="Delete Selected Folder or File" class="purple-button"><i class="fa-solid fa-trash-alt"></i></button>
