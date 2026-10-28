@@ -16,3 +16,11 @@
 .circuit-picture svg { width: 100%; height: auto; }
 .simulation-status { font-weight: bold; }
 @media (max-width: 1000px) { .blocks-body { flex-direction: column; overflow: auto; } .blocks-workspace { flex: none; height: 450px; } .circuit-panel { width: auto; max-height: none; overflow: visible; } }
+.display-wiring[hidden] { display: none; }
+.circuit-panel .display-enabled { width: auto; }
+.component-add { display: flex; gap: 6px; margin: 12px 0; flex-wrap: wrap; }
+.led-component { margin: 12px 0; border: 1px solid #aab2bc; border-radius: 6px; padding: 8px; }
+.led-component > label { display: block; margin: 6px 0; }
+.led-channel { display: flex; gap: 8px; align-items: center; margin: 6px 0; }
+.circuit-panel .led-channel input { width: 65px; }
+.circuit-panel button { cursor: pointer; padding: 4px 7px; }

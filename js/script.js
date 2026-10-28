@@ -407,7 +407,7 @@ async function confirmReplaceDocument() {
 
 async function saveRunFile() {
     if (documentMode === 'blockly' || documentMode === 'python-preview') {
-        try { blocksEditor.assertValidWiring(); }
+        try { blocksEditor.assertRunnable(); }
         catch (error) { await showMessage(error.message); return; }
     }
     if (await checkConnected()) {
@@ -830,7 +830,7 @@ function sleep(ms) {
 // before the PUT had succeeded (issue #460).
 async function saveFileContents(path) {
     if (documentMode === 'blockly' || documentMode === 'python-preview') {
-        try { blocksEditor.assertValidWiring(); }
+        try { blocksEditor.assertRunnable(); }
         catch (error) { await showMessage(error.message); return false; }
     }
     if (saveInFlight) {

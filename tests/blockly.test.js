@@ -18,7 +18,7 @@ test('starter project round-trips and generates hardware Python', () => {
         assert.match(code, /while True:\n    show_digit\(8\)\n    time.sleep\(1\)\n    clear_display\(\)\n    time.sleep\(1\)/);
         assert.match(code, /_active = True/);
         assert.match(generatePython(restored, { ...DEFAULT_CIRCUIT, common: 'anode' }), /_active = False/);
-        assert.match(code, /GPIO.*str\(_gpio\)/);
+        assert.match(code, /GPIO.*str\(number\)/);
     } finally { workspace.dispose(); restored.dispose(); }
 });
 
@@ -47,4 +47,94 @@ test('forever with no wait can be stopped', async () => {
     let ticks = 0;
     await simulate([{ type: 'forever', body: [] }], { signal: controller.signal, render: () => {}, wait: async () => { if (++ticks === 3) controller.abort(); } });
     assert.equal(ticks, 3);
+});
+
+import { configureWorkspace } from '../js/blockly/blocks.js';
+import { normalizeCircuit, validateProgram, circuitPythonSetup } from '../js/blockly/model.js';
+import { lessonPreset, makeLed } from '../js/blockly/presets.js';
+import { spawnSync } from 'node:child_process';
+
+test('onboard, multiple and RGB lessons round-trip with their component selections', () => {
+    for (const kind of ['onboard', 'multiple', 'rgb']) {
+        const preset = lessonPreset(kind);
+        const workspace = new Blockly.Workspace(), restored = new Blockly.Workspace();
+        try {
+            configureWorkspace(workspace, preset.circuit);
+            Blockly.serialization.workspaces.load(preset.workspace, workspace);
+            configureWorkspace(restored, preset.circuit);
+            Blockly.serialization.workspaces.load(Blockly.serialization.workspaces.save(workspace), restored);
+            assert.deepEqual(programFromWorkspace(restored), programFromWorkspace(workspace));
+            const code = generatePython(restored, preset.circuit);
+            assert.ok(!code.includes('_segment_names ='), 'LED-only lessons do not allocate display GPIOs');
+            assert.match(code, kind === 'rgb' ? /set_rgb\("rgb1", True, False, False\)/ : /set_led\("led1", True\)/);
+        } finally { workspace.dispose(); restored.dispose(); }
+    }
+});
+
+test('legacy seven-segment circuits normalize without losing wiring', () => {
+    const normalized = normalizeCircuit(DEFAULT_CIRCUIT);
+    assert.equal(normalized.displayEnabled, true);
+    assert.deepEqual(normalized.leds, []);
+    assert.deepEqual(normalized.pins, DEFAULT_CIRCUIT.pins);
+});
+
+test('validates collisions across display and LEDs, RGB channels, and missing targets', () => {
+    const circuit = lessonPreset('multiple').circuit;
+    assert.doesNotThrow(() => validateCircuit(circuit));
+    assert.throws(() => validateCircuit({...circuit, leds:[...circuit.leds, makeLed('rgb1','rgb',[4,5,33])]}), /different GPIO/);
+    assert.throws(() => validateCircuit({...normalizeCircuit(DEFAULT_CIRCUIT), leds:[makeLed('led1','single',[18])]}), /different GPIO/);
+    assert.throws(() => validateProgram([{type:'led',id:'missing',on:true}],circuit), /Add LED/);
+    assert.throws(() => validateProgram([{type:'rgb',id:'led1',values:[true,true,true]}],circuit), /not an RGB/);
+    assert.throws(() => validateProgram([{type:'gpio',pin:2,high:true}],circuit), /Connect an LED/);
+    assert.throws(() => validateProgram([{type:'digit',value:1}],circuit), /Enable the seven/);
+    assert.throws(() => validateCircuit({...circuit, leds:[makeLed('led1','rgb',[1,1,2])]}), /different GPIO/);
+});
+
+test('multiple LEDs, RGB mixing and raw GPIO share the same simulation output state', async () => {
+    const circuit = {...lessonPreset('multiple').circuit};
+    circuit.leds.push({...makeLed('rgb1','rgb',[4,5,16]),activeLow:true});
+    const frames = [];
+    await simulate([
+        {type:'led',id:'led1',on:true}, {type:'led',id:'led2',on:true},
+        {type:'rgb',id:'rgb1',values:[true,false,true]},
+        {type:'gpio',pin:5,high:false}, // Active-low green joins red + blue -> white.
+        {type:'gpio',pin:33,high:false}, {type:'led',id:'led2',on:false},
+    ], {circuit,signal:new AbortController().signal,wait:async()=>{},render:(_segments,leds)=>frames.push(leds)});
+    assert.deepEqual(frames[1].get('led1'),[true]);
+    assert.deepEqual(frames[1].get('led2'),[true]);
+    assert.deepEqual(frames[2].get('rgb1'),[true,false,true]);
+    assert.deepEqual(frames[3].get('rgb1'),[true,true,true]);
+    assert.deepEqual(frames.at(-1).get('led1'),[false]);
+    assert.deepEqual(frames.at(-1).get('led2'),[false]);
+});
+
+test('generated CircuitPython drives board.IO pins and GPIO fallback with matching polarities', () => {
+    const circuit = {...lessonPreset('multiple').circuit};
+    circuit.leds.push({...makeLed('rgb1','rgb',[4,5,16]),activeLow:true});
+    const script = `
+import sys, types
+created = {}
+class Output:
+    def __init__(self, pin):
+        self.pin = pin
+        created[pin] = self
+    def switch_to_output(self, value): self.value = value
+sys.modules['board'] = types.SimpleNamespace(IO33=33, IO25=25)
+sys.modules['microcontroller'] = types.SimpleNamespace(pin=types.SimpleNamespace(GPIO4=4, GPIO5=5, GPIO16=16))
+sys.modules['digitalio'] = types.SimpleNamespace(DigitalInOut=Output)
+${circuitPythonSetup(circuit)}
+assert len(created) == 5
+assert created[33].value is False and created[4].value is True
+set_led('led1', True)
+set_led('led2', True)
+assert created[33].value is True and created[25].value is True
+set_rgb('rgb1', True, False, True)
+assert [created[p].value for p in (4,5,16)] == [False, True, False]
+set_gpio(5, False)
+assert created[5].value is False
+set_led('led1', False)
+assert created[33].value is False
+`;
+    const result = spawnSync('python3', ['-c', script], {encoding:'utf8'});
+    assert.equal(result.status, 0, result.stderr || result.error?.message);
 });
