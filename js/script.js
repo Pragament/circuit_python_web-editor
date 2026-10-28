@@ -1103,6 +1103,9 @@ document.addEventListener('DOMContentLoaded', async (event) => {
         });
     });
 
+    // Ask on every page load, before any device connection dialogs.
+    await newFile();
+
     // Check backend param and load appropriate type if specified
     let backend = getBackend();
     if (backend) {

@@ -2,7 +2,11 @@ import * as Blockly from 'blockly';
 import { pythonGenerator } from 'blockly/python';
 import { SEGMENTS, circuitPythonSetup, normalizeCircuit, validateProgram } from './model.js';
 
+import { INPUT_BLOCKS, conditionFromBlock } from './input-blocks.js';
+
 pythonGenerator.INDENT = '    ';
+// Disconnected condition blocks are editor fragments, not executable statements.
+pythonGenerator.scrubNakedValue = () => '';
 
 Blockly.defineBlocksWithJsonArray([
     { type: 'esp_digit', message0: 'display digit %1', args0: [{ type: 'field_number', name: 'DIGIT', value: 0, min: 0, max: 9, precision: 1 }], previousStatement: null, nextStatement: null, colour: 285 },
@@ -22,6 +26,16 @@ function ledMenu(rgbOnly) {
         return options.length ? options : [['choose LED', 'led1']];
     };
 }
+for (const [type, label] of [['esp_led_toggle','toggle LED'],['esp_led_blink','blink LED']]) {
+    Blockly.Blocks[type] = { init() {
+        const input = this.appendDummyInput().appendField(label).appendField(new Blockly.FieldDropdown(ledMenu(false)), 'LED');
+        this.getField('LED').setOptions(ledMenu(false));
+        if (type === 'esp_led_blink') input.appendField('every').appendField(new Blockly.FieldNumber(0.5,0.01,3600,0.01),'SECONDS').appendField('seconds (without waiting)');
+        this.setPreviousStatement(true); this.setNextStatement(true); this.setColour(30);
+    } };
+}
+pythonGenerator.forBlock.esp_led_toggle = block => `toggle_led(${JSON.stringify(block.getFieldValue('LED'))})\n`;
+pythonGenerator.forBlock.esp_led_blink = block => `blink_led(${JSON.stringify(block.getFieldValue('LED'))}, ${block.getFieldValue('SECONDS')})\n`;
 const onOptions = [['on', 'TRUE'], ['off', 'FALSE']];
 Blockly.Blocks.esp_led = { init() {
     this.appendDummyInput().appendField('turn LED').appendField(new Blockly.FieldDropdown(ledMenu(false)), 'LED').appendField(new Blockly.FieldDropdown(onOptions), 'ON');
@@ -44,7 +58,7 @@ export function configureWorkspace(workspace, circuit) {
 }
 export function refreshFlyoutLeds(workspace) {
     for (const block of workspace.getFlyout()?.getWorkspace().getAllBlocks(false) ?? []) {
-        if (block.type === 'esp_led' || block.type === 'esp_rgb') {
+        if (['esp_led','esp_rgb','esp_led_toggle','esp_led_blink'].includes(block.type)) {
             block.getField('LED').setOptions(ledMenu(block.type === 'esp_rgb'));
         }
     }
@@ -55,9 +69,9 @@ pythonGenerator.forBlock.esp_segment = block => `set_segment("${block.getFieldVa
 pythonGenerator.forBlock.esp_clear = () => 'clear_display()\n';
 pythonGenerator.forBlock.esp_wait = block => `time.sleep(${block.getFieldValue('SECONDS')})\n`;
 pythonGenerator.forBlock.esp_repeat = (block, generator) => `for _ in range(${block.getFieldValue('COUNT')}):\n${generator.statementToCode(block, 'DO') || '    pass\n'}`;
-pythonGenerator.forBlock.esp_forever = (block, generator) => `while True:\n${generator.statementToCode(block, 'DO') || '    pass\n'}`;
+pythonGenerator.forBlock.esp_forever = (block, generator) => `while True:\n${generator.statementToCode(block, 'DO') || '    pass\n'}    time.sleep(0.01)\n`;
 
-export const toolbox = { kind: 'flyoutToolbox', contents: ['esp_led', 'esp_rgb', 'esp_gpio', 'esp_digit', 'esp_segment', 'esp_clear', 'esp_wait', 'esp_repeat', 'esp_forever'].map(type => ({ kind: 'block', type })) };
+export const toolbox = { kind: 'flyoutToolbox', contents: ['esp_led', 'esp_led_toggle', 'esp_led_blink', 'esp_rgb', 'esp_gpio', 'esp_wait', 'esp_repeat', 'esp_forever', ...INPUT_BLOCKS, 'esp_digit', 'esp_segment', 'esp_clear'].map(type => ({ kind: 'block', type })) };
 export const starter = { blocks: { languageVersion: 0, blocks: [{ type: 'esp_forever', x: 40, y: 40, inputs: { DO: { block: { type: 'esp_digit', fields: { DIGIT: 8 }, next: { block: { type: 'esp_wait', fields: { SECONDS: 1 }, next: { block: { type: 'esp_clear', next: { block: { type: 'esp_wait', fields: { SECONDS: 1 } } } } } } } } } } }] } };
 export function generatePython(workspace, circuit) {
     validateProgram(programFromWorkspace(workspace), circuit);
@@ -69,6 +83,17 @@ export function programFromWorkspace(workspace) {
         for (; block; block = block.getNextBlock()) {
             if (!block.isEnabled()) continue;
             switch (block.type) {
+                case 'esp_wait_counter': operations.push({type:'wait_counter'}); break;
+                case 'esp_repeat_counter': operations.push({type:'repeat_counter',body:chain(block.getInputTargetBlock('DO'))}); break;
+                case 'esp_calculate': operations.push({type:'calculate',a:Number(block.getFieldValue('A')),b:Number(block.getFieldValue('B'))}); break;
+                case 'esp_if': operations.push({type:'if',condition:conditionFromBlock(block.getInputTargetBlock('CONDITION')),body:chain(block.getInputTargetBlock('DO')),otherwise:chain(block.getInputTargetBlock('ELSE'))}); break;
+                case 'esp_counter_set': operations.push({type:'counter_set',value:Number(block.getFieldValue('VALUE'))}); break;
+                case 'esp_counter_change': operations.push({type:'counter_change',value:Number(block.getFieldValue('VALUE'))}); break;
+                case 'esp_counter_print': operations.push({type:'print_counter'}); break;
+                case 'esp_mode_set': operations.push({type:'mode_set',value:block.getFieldValue('VALUE')==='TRUE'}); break;
+                case 'esp_mode_toggle': operations.push({type:'mode_toggle'}); break;
+                case 'esp_led_toggle': operations.push({type:'toggle',id:block.getFieldValue('LED')}); break;
+                case 'esp_led_blink': operations.push({type:'blink',id:block.getFieldValue('LED'),seconds:Number(block.getFieldValue('SECONDS'))}); break;
                 case 'esp_led': operations.push({type: 'led', id: block.getFieldValue('LED'), on: block.getFieldValue('ON') === 'TRUE'}); break;
                 case 'esp_rgb': operations.push({type: 'rgb', id: block.getFieldValue('LED'), values: ['RED', 'GREEN', 'BLUE'].map(name => block.getFieldValue(name) === 'TRUE')}); break;
                 case 'esp_gpio': operations.push({type: 'gpio', pin: Number(block.getFieldValue('PIN')), high: block.getFieldValue('HIGH') === 'TRUE'}); break;
@@ -83,5 +108,5 @@ export function programFromWorkspace(workspace) {
         }
         return operations;
     }
-    return workspace.getTopBlocks(true).flatMap(chain);
+    return workspace.getTopBlocks(true).filter(block => !block.outputConnection).flatMap(chain);
 }

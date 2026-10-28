@@ -70,3 +70,27 @@ Use **Simulate** to run the blocks against the displayed ESP32 / breadboard / se
 **Run on ESP32** uses the same connection, save, and run workflow as **Save + Run**. Install CircuitPython on a supported ESP32 board, connect over USB, WiFi, or Bluetooth as supported by the board, and save the generated code as `code.py` to run it. Generated programs use CircuitPython's `digitalio`, resolving `board.IO…` names first with a `microcontroller.pin.GPIO…` fallback. MicroPython is not supported by this integration. Saving to the board writes Python; download the blocks separately to preserve the editable project.
 
 Run `npm test` (Node.js and Python 3) for Blockly serialization, Python generation/execution with GPIO test doubles, wiring validation, and simulator checks, and `npm run build` for the production bundle.
+
+
+### BOOT input and condition lessons
+
+The example selector includes the five BOOT projects: button-controlled LED, a two-second long-press detector, press-to-start blinking, a press counter, and a two-mode LED (steady/blinking). Additional examples cover toggle-on-press, LED-on-while-released, and blink-while-held. The catalogue contains 25 onboard-LED-only examples, eight BOOT examples and three external-component examples, for 36 examples total.
+
+BOOT defaults to GPIO0, active LOW, using `digitalio.Pull.UP`; the onboard LED defaults to GPIO2. Both pins can be changed for the actual board. Enable BOOT input in Circuit components when building a custom project. Its GPIO cannot also drive an LED or display. BOOT pin assignments vary by ESP32 variant. Release BOOT before resetting the real ESP32: holding GPIO0 LOW at reset can select the ROM download bootloader ([Espressif boot-mode documentation](https://docs.espressif.com/projects/esptool/en/latest/esp32/advanced-topics/boot-mode-selection.html)).
+
+Blocks include if/else, BOOT pressed, BOOT newly pressed, BOOT held for a configurable duration, not, true/false, a counter with set/change/compare/print, and a mode flag with set/toggle/read. There is one shared counter and one shared mode flag per program. Toggle LED and nonblocking blink blocks allow button input to stay responsive while blinking. The counter example turns the LED on at five presses; the two-mode example changes modes on each new press. Long-press detection measures a continuous hold and resets on release.
+
+In the simulator, press and hold **Hold BOOT** with the pointer or Space/Enter, or select **Keep BOOT pressed** for a sustained input. Release it for the next press. The status shows the raw HIGH/LOW input, debounced input, counter, mode, and printed counter output. Debouncing takes 30 ms; a held button generates one new-press event until released. Explicit wait blocks pause input polling, just as in the generated Python, so the button lessons use nonblocking blink and short polling loops. Stop resets the simulated button; restarting the simulation resets counter and mode. Version-3 project files include BOOT wiring, and versions 1 and 2 remain supported.
+
+
+### Onboard LED only (25 examples)
+
+Choose the **Onboard LED only (25)** group in the example selector. Every example disables BOOT and the seven-segment display and uses just the onboard LED (GPIO2 by default, editable for the actual board).
+
+The group includes LED ON, LED OFF, continuous/fast/slow blinking, triple/double blinks, SOS, finite blink, countdown flashes, short/long pulses, increasing/decreasing speed, heartbeat, alternating patterns, variable-based blinking, nested loops, traffic-timing analogy, startup, completion, continuous status, error, mode, activity and timed-sequence indicators. Continuous Blink retains the existing `onboard` project identifier.
+
+**Wait counter milliseconds** and **repeat counter times** use the shared counter variable. Repeat evaluates the counter once when entering the loop, truncates it to an integer and limits it to 0–100000 iterations. Countdown uses groups of five through one flash. The speed examples change the delay between 100 and 1000 ms. Finite patterns stop with the LED off; Startup Indicator finishes with the LED on. SOS uses three short, three long and three short pulses. Traffic Signal Timing represents phases with timing only: a single LED cannot display red, yellow and green.
+
+The calculation task block divides its numeric operands, stores the result in the counter and catches a real `ZeroDivisionError` in generated Python. **Calculation error occurred** exposes that result as a condition. Error Pattern intentionally calculates `10 / 0` and flashes its error pattern; changing the divisor to `2` clears the error and holds the LED on. Completion and activity examples perform and print a valid calculation before indicating completion/activity; they do not depend on external sensors or a button.
+
+The simulator's program-state panel shows counter, mode, calculation error and printed output for LED-only projects too. Restarting simulation resets all program state. The same blocks generate executable CircuitPython for the existing Save + Run workflow.

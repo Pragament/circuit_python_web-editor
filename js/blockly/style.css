@@ -24,3 +24,13 @@
 .led-channel { display: flex; gap: 8px; align-items: center; margin: 6px 0; }
 .circuit-panel .led-channel input { width: 65px; }
 .circuit-panel button { cursor: pointer; padding: 4px 7px; }
+.circuit-panel .boot-enabled, .circuit-panel .boot-latched { width: auto; }
+.boot-config { margin: 10px 0; padding: 8px; border: 1px solid #aab2bc; border-radius: 6px; }
+.boot-controls { padding: 10px; border: 1px solid #8b6bae; border-radius: 6px; background: #eee5f6; margin: 10px 0; }
+.boot-controls[hidden] { display: none; }
+.boot-controls label { display: block; margin: 8px 0; }
+.boot-momentary { touch-action: none; user-select: none; }
+.boot-momentary[aria-pressed="true"] { background: #654087; color: white; }
+.simulation-log { max-height: 100px; overflow: auto; }
+.lesson-description { font-weight: 600; }
+.program-state { border: 1px solid #b8c3d2; background: #edf2f7; border-radius: 6px; padding: 8px; margin: 10px 0; }

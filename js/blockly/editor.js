@@ -3,7 +3,7 @@ import * as English from 'blockly/msg/en';
 import { toolbox, starter, generatePython, programFromWorkspace, configureWorkspace, refreshFlyoutLeds } from './blocks.js';
 import { DEFAULT_CIRCUIT, SEGMENTS, simulate, validateCircuit, normalizeCircuit, validateProgram } from './model.js';
 import './style.css';
-import { makeLed, lessonPreset } from './presets.js';
+import { makeLed, lessonPreset, LESSONS } from './presets.js';
 import { renderLeds } from './led-view.js';
 
 Blockly.setLocale(English);
@@ -46,11 +46,29 @@ export class BlocksEditor {
                 <div class="blocks-workspace" aria-label="Blockly workspace"></div>
                 <aside class="circuit-panel">
                     <h2>Circuit components</h2>
-                    <label>Example <select class="lesson-preset"><option value="display">Seven-segment blink</option><option value="onboard">Onboard LED blink · GPIO2</option><option value="multiple">Two LEDs · GPIO33 + GPIO25</option><option value="rgb">RGB color cycle</option></select></label>
+                    <label>Example <select class="lesson-preset">${[
+                        ['Onboard LED only (25)',LESSONS.filter(([id])=>id==='onboard'||id.startsWith('onboard-'))],
+                        ['Onboard LED + BOOT (8)',LESSONS.filter(([id])=>id.startsWith('button-'))],
+                        ['External components (3)',LESSONS.filter(([id])=>['display','multiple','rgb'].includes(id))],
+                    ].map(([group,lessons])=>`<optgroup label="${group}">${lessons.map(([id,label])=>`<option value="${id}">${label}</option>`).join('')}</optgroup>`).join('')}</select></label>
                     <button type="button" data-action="lesson">Load example</button>
-                    <p>Examples replace the current blocks and wiring.</p>
+                    <p class="lesson-description">${LESSONS[0][2]}</p>
+                    <details class="boot-config"><summary>BOOT input wiring</summary>
+                        <label><input type="checkbox" class="boot-enabled"> Enable BOOT input</label>
+                        <label>GPIO <input type="number" class="boot-pin" min="0" max="48" value="0" aria-label="BOOT GPIO"></label>
+                        <p>Active LOW with pull-up. Verify your board's BOOT pin. Release BOOT before resetting the real ESP32.</p>
+                    </details>
+                    <div class="boot-controls" hidden>
+                        <button type="button" class="boot-momentary" aria-pressed="false">Hold BOOT</button>
+                        <label><input type="checkbox" class="boot-latched"> Keep BOOT pressed</label>
+                        <div class="boot-level">BOOT released · HIGH</div>
+                    </div>
+                    <div class="program-state">
+                        <div class="runtime-values">Counter: 0 · Mode: off · Error: no</div>
+                        <details><summary>Simulator output</summary><pre class="simulation-log" aria-label="Simulator output"></pre></details>
+                    </div>
                     <label><input type="checkbox" class="display-enabled" checked> Seven-segment display</label>
-                    <p>Use one series resistor per external LED channel.</p>
+                    <p class="resistor-hint">Use one series resistor per external LED channel.</p>
                     <p class="simulation-status" role="status" aria-live="polite">Ready</p>
                     <div class="circuit-picture"></div>
                     <div class="led-components"></div>
@@ -67,13 +85,30 @@ export class BlocksEditor {
                 </aside>
             </div>`;
         this.status = this.panel.querySelector('.simulation-status');
+        const bootButton = this.panel.querySelector('.boot-momentary');
+        this.bootHeld = false;
+        this.readBoot = () => this.bootHeld || this.panel.querySelector('.boot-latched').checked;
+        this.updateBootLevel = () => {
+            const pressed = this.readBoot();
+            bootButton.setAttribute('aria-pressed', String(pressed));
+            this.panel.querySelector('.boot-level').textContent = `BOOT ${pressed ? 'pressed · LOW' : 'released · HIGH'}`;
+        };
+        bootButton.onpointerdown = event => { bootButton.setPointerCapture(event.pointerId); this.bootHeld = true; this.updateBootLevel(); };
+        const release = () => { this.bootHeld = false; this.updateBootLevel(); };
+        bootButton.onpointerup = release;
+        bootButton.onpointercancel = release;
+        bootButton.onlostpointercapture = release;
+        bootButton.onkeydown = event => { if ([' ', 'Enter'].includes(event.key)) { event.preventDefault(); this.bootHeld = true; this.updateBootLevel(); } };
+        bootButton.onkeyup = release;
+        bootButton.onblur = release;
+        this.panel.querySelector('.boot-latched').onchange = this.updateBootLevel;
         this.panel.querySelector('[data-action="simulate"]').onclick = () => this.runSimulation();
         this.panel.querySelector('[data-action="stop"]').onclick = () => this.stop();
         this.panel.querySelector('[data-action="python"]').onclick = () => this.perform(() => { this.assertValidWiring(); validateProgram(programFromWorkspace(this.workspace), this.circuit); onConvert(this.code); });
         this.panel.querySelector('[data-action="run"]').onclick = () => this.perform(() => { this.assertValidWiring(); validateProgram(programFromWorkspace(this.workspace), this.circuit); return onRun(); });
         this.panel.querySelector('[data-action="download"]').onclick = () => {
             try { this.assertValidWiring(); } catch (error) { this.invalid(error); return; }
-            download('project.blockly.json', JSON.stringify({ format: 'circuitstudio-blockly', version: 2, circuit: this.circuit, workspace: Blockly.serialization.workspaces.save(this.workspace) }, null, 2), 'application/json');
+            download('project.blockly.json', JSON.stringify({ format: 'circuitstudio-blockly', version: 3, circuit: this.circuit, workspace: Blockly.serialization.workspaces.save(this.workspace) }, null, 2), 'application/json');
             this.savedProject = this.projectSnapshot();
         };
         const fileInput = this.panel.querySelector('input[type="file"]');
@@ -84,7 +119,7 @@ export class BlocksEditor {
             if (!file) return;
             if (file.size > 1000000) throw new Error('Choose a Blockly project smaller than 1 MB.');
             const project = JSON.parse(await file.text());
-            if (project.format !== 'circuitstudio-blockly' || ![1, 2].includes(project.version)) throw new Error('Choose a CircuitStudio Blockly project.');
+            if (project.format !== 'circuitstudio-blockly' || ![1, 2, 3].includes(project.version)) throw new Error('Choose a CircuitStudio Blockly project.');
             validateCircuit(project.circuit);
             // Validate in a temporary workspace before replacing the current project.
             const temporary = new Blockly.Workspace();
@@ -106,9 +141,11 @@ export class BlocksEditor {
         });
         this.panel.querySelector('[data-action="lesson"]').onclick = () => this.perform(async () => {
             if (!await this.confirmReplace()) return;
-            const preset = lessonPreset(this.panel.querySelector('.lesson-preset').value);
+            const kind = this.panel.querySelector('.lesson-preset').value;
+            const preset = lessonPreset(kind);
+            this.panel.querySelector('.lesson-description').textContent = LESSONS.find(([id])=>id===kind)[2];
             this.stop();
-            this.circuit = preset.circuit;
+            this.circuit = normalizeCircuit(preset.circuit);
             configureWorkspace(this.workspace, this.circuit);
             this.loading = true;
             try { Blockly.serialization.workspaces.load(preset.workspace, this.workspace); }
@@ -119,7 +156,7 @@ export class BlocksEditor {
         this.panel.querySelector('[data-action="add-led"]').onclick = () => this.perform(() => {
             this.assertValidWiring();
             const type = this.panel.querySelector('[aria-label="New LED type"]').value;
-            const used = new Set([...(this.circuit.displayEnabled ? this.circuit.pins : []), ...this.circuit.leds.flatMap(led => led.pins)]);
+            const used = new Set([...(this.circuit.displayEnabled ? this.circuit.pins : []), ...this.circuit.leds.flatMap(led => led.pins), ...(this.circuit.boot.enabled ? [this.circuit.boot.pin] : [])]);
             const preferred = [...new Set([2,4,5,16,17,18,19,21,22,23,25,26,27,32,33,...Array.from({length:49},(_,i)=>i)])].filter(pin => !used.has(pin));
             const count = type === 'rgb' ? 3 : 1;
             if (this.circuit.leds.length >= 16 || preferred.length < count) throw new Error('No more LED channels are available.');
@@ -137,7 +174,7 @@ export class BlocksEditor {
             this.perform(() => this.update());
         });
         const changed = event => {
-            if (!event.target.matches('.display-common, .display-enabled, [data-pin], [data-resistor], [data-led-pin], [data-led-resistor], [data-led-polarity], [data-led-color]')) return;
+            if (!event.target.matches('.display-common, .display-enabled, .boot-enabled, .boot-pin, [data-pin], [data-resistor], [data-led-pin], [data-led-resistor], [data-led-polarity], [data-led-color]')) return;
             this.panel.querySelector('.display-wiring').hidden = !this.panel.querySelector('.display-enabled').checked;
             this.stop();
             try {
@@ -173,6 +210,7 @@ export class BlocksEditor {
             resistors: numericValues('[data-resistor]'),
             common: this.panel.querySelector('.display-common').value,
             displayEnabled: this.panel.querySelector('.display-enabled').checked,
+            boot: {enabled:this.panel.querySelector('.boot-enabled').checked,pin:this.panel.querySelector('.boot-pin').value === '' ? NaN : Number(this.panel.querySelector('.boot-pin').value)},
             leds: this.circuit.leds.map(led => ({ ...led,
                 pins: numericValues(`[data-led-pin="${led.id}"]`),
                 resistors: led.type === 'onboard' ? [220] : numericValues(`[data-led-resistor="${led.id}"]`),
@@ -182,9 +220,15 @@ export class BlocksEditor {
         };
         validateCircuit(candidate);
         this.circuit = candidate;
+        this.panel.querySelector('.resistor-hint').hidden = !candidate.displayEnabled && candidate.leds.every(led => led.type === 'onboard');
+        this.panel.querySelector('.boot-config > summary').textContent = `BOOT input wiring · GPIO${candidate.boot.pin} · ${candidate.boot.enabled ? 'enabled' : 'disabled'}`;
+        this.panel.querySelector('.boot-controls').hidden = !candidate.boot.enabled;
         if (this.workspace) configureWorkspace(this.workspace, candidate);
     }
     syncInputs() {
+        this.panel.querySelector('.boot-enabled').checked = this.circuit.boot.enabled;
+        this.panel.querySelector('.boot-pin').value = this.circuit.boot.pin;
+        this.panel.querySelector('.boot-controls').hidden = !this.circuit.boot.enabled;
         this.panel.querySelector('.display-enabled').checked = this.circuit.displayEnabled;
         this.panel.querySelector('.display-wiring').hidden = !this.circuit.displayEnabled;
         this.renderComponentInputs();
@@ -225,6 +269,8 @@ export class BlocksEditor {
         this.loading = true;
         this.circuit = normalizeCircuit(structuredClone(DEFAULT_CIRCUIT));
         this.savedProject = null;
+        this.panel.querySelector('.lesson-preset').value = 'display';
+        this.panel.querySelector('.lesson-description').textContent = LESSONS[0][2];
         this.syncInputs();
         Blockly.serialization.workspaces.load(starter, this.workspace);
         this.loading = false;
@@ -246,6 +292,9 @@ export class BlocksEditor {
         this.onCode(this.code);
     }
     stop() {
+        this.bootHeld = false;
+        this.panel.querySelector('.boot-latched').checked = false;
+        this.updateBootLevel();
         this.controller?.abort();
         this.controller = null;
         this.panel.querySelector('[data-action="stop"]').disabled = true;
@@ -265,9 +314,13 @@ export class BlocksEditor {
         this.panel.querySelector('[data-action="simulate"]').disabled = true;
         this.render(new Set());
         this.status.textContent = 'Running';
+        this.panel.querySelector('.simulation-log').textContent = '';
         try {
             this.assertValidWiring();
-            await simulate(programFromWorkspace(this.workspace), { signal: controller.signal, render: (lit, leds) => this.render(lit, leds), wait: delay, circuit: this.circuit });
+            await simulate(programFromWorkspace(this.workspace), { signal: controller.signal, render: (lit, leds, values) => this.render(lit, leds, values), wait: delay, circuit: this.circuit, readBoot: this.readBoot, log: text => {
+                const output = this.panel.querySelector('.simulation-log');
+                output.textContent = [...output.textContent.split('\n').filter(Boolean), text].slice(-20).join('\n');
+            } });
             if (!controller.signal.aborted) this.status.textContent = 'Finished';
         } catch (error) { this.status.textContent = error.message; }
         finally {
@@ -278,7 +331,8 @@ export class BlocksEditor {
             }
         }
     }
-    render(lit, leds = new Map()) {
+    render(lit, leds = new Map(), values = {counter:0,mode:false}) {
+        this.panel.querySelector('.runtime-values').textContent = `Counter: ${values.counter} · Mode: ${values.mode ? 'on' : 'off'}${this.circuit.boot.enabled ? ` · Input: ${values.pressed ? 'pressed' : 'released'}` : ''} · Error: ${values.error ? 'yes' : 'no'}`;
         this.panel.querySelector('.circuit-picture').innerHTML = (this.circuit.displayEnabled ? this.displayPicture(lit) : '') + renderLeds(this.circuit, leds);
     }
     displayPicture(lit) {
