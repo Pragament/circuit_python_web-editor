@@ -1,3 +1,4 @@
+import { explainLesson } from './lesson-comments.js';
 import { DEFAULT_CIRCUIT } from './model.js';
 import { ONBOARD_LESSONS, onboardLesson } from './onboard-lessons.js';
 import { starter } from './blocks.js';
@@ -8,12 +9,17 @@ function chain(blocks) {
     return blocks.reduceRight((next, block) => ({ ...block, ...(next ? {next:{block:next}} : {}) }), null);
 }
 export function lessonPreset(kind) {
+    const lesson = LESSONS.find(([id])=>id === kind);
+    const preset = buildLesson(kind);
+    return explainLesson(preset,lesson[1],lesson[2]);
+}
+function buildLesson(kind) {
+    if (kind === 'gpio-minimal') return {circuit:{...structuredClone(DEFAULT_CIRCUIT),displayEnabled:false,leds:[]},workspace:{blocks:{languageVersion:0,blocks:[{type:'esp_forever',x:30,y:30,inputs:{DO:{block:{type:'esp_if',inputs:{CONDITION:{block:{type:'esp_gpio_level',fields:{PIN:0,HIGH:'FALSE'}}},DO:{block:{type:'esp_gpio',fields:{PIN:2,HIGH:'TRUE'}}}}}}}}]}}};
     if (kind === 'onboard' || kind.startsWith('onboard-')) return onboardLesson(kind);
     if (kind.startsWith('button-')) return buttonLesson(kind);
     const circuit = { ...structuredClone(DEFAULT_CIRCUIT), displayEnabled: kind === 'display', leds: [] };
     if (kind === 'display') return {circuit, workspace: structuredClone(starter)};
-    if (kind === 'onboard') circuit.leds = [makeLed('led1', 'onboard', [2])];
-    else if (kind === 'multiple') circuit.leds = [makeLed('led1', 'single', [33]), makeLed('led2', 'single', [25])];
+    if (kind === 'multiple') circuit.leds = [makeLed('led1', 'single', [33]), makeLed('led2', 'single', [25])];
     else if (kind === 'rgb') circuit.leds = [makeLed('rgb1', 'rgb', [16,17,18])];
     else throw new Error('Unknown lesson.');
     const blocks = [];
@@ -31,6 +37,7 @@ export function lessonPreset(kind) {
 
 export const LESSONS = [
     ['display','Seven-segment blink','Blink digit 8 using the seven-segment display.'],
+    ['gpio-minimal','Minimal GPIO · if input → set output','Forever → generic if with a GPIO 0 is LOW condition → set GPIO 2 HIGH. Edit either pin and level in the blocks. Input uses a pull-up; output starts LOW and holds its value when the condition is false.'],
     ...ONBOARD_LESSONS,
     ['multiple','Two LEDs · GPIO33 + GPIO25','Switch two breadboard LEDs on and off together.'],
     ['rgb','RGB color cycle','Cycle red, green and blue using three GPIO channels.'],

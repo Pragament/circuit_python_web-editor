@@ -37,7 +37,7 @@ test('exactly 25 LED-only examples allocate only onboard GPIO2 and no BOOT input
             assert.equal(item.circuit.displayEnabled,false);
             assert.deepEqual(item.circuit.leds.map(led=>[led.type,led.pins]),[['onboard',[2]]]);
             const source=generatePython(item.workspace,item.circuit);
-            assert.ok(!source.includes('_boot_pin ='));
+            assert.ok(!source.includes('_boot_button ='));
         }finally{item.workspace.dispose();}
     }
 });
@@ -113,7 +113,7 @@ for item in json.load(sys.stdin):
     try: exec(compile(item['source'],item['kind'],'exec'),namespace)
     except Finished: pass
     kind=item['kind']
-    assert '_boot_pin' not in namespace
+    assert '_boot_button' not in namespace
     counts={'onboard-finite':5,'onboard-countdown':15,'onboard-variable':4,'onboard-nested':12,'onboard-complete':3,'onboard-sequence':3}
     if kind in counts:
         assert clock[0]<60

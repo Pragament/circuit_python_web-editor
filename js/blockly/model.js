@@ -1,4 +1,4 @@
-import { BootButton, BUTTON_PYTHON } from './button-runtime.js';
+import { BootButton } from './button-runtime.js';
 export const SEGMENTS = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'dp'];
 export const DIGITS = ['abcdef', 'bc', 'abdeg', 'abcdg', 'bcfg', 'acdfg', 'acdefg', 'abc', 'abcdefg', 'abcdfg'];
 export const DEFAULT_CIRCUIT = { pins: [18, 19, 21, 22, 23, 25, 26, 27], resistors: Array(8).fill(220), common: 'cathode' };
@@ -38,115 +38,17 @@ export function validateCircuit(value) {
     }
 }
 
-export function circuitPythonSetup(value) {
-    const circuit = normalizeCircuit(value);
-    validateCircuit(circuit);
-    const active = circuit.common === 'cathode' ? 'True' : 'False';
-    let code = `import time
-import board
-import microcontroller
-import digitalio
-
-# GPIO numbers must match your ESP32 variant and wiring.
-# Breadboard LEDs need one series resistor per channel.
-def _resolve_pin(number):
-    pin = getattr(board, "IO" + str(number), None)
-    if pin is None:
-        pin = getattr(microcontroller.pin, "GPIO" + str(number))
-    return pin
-
-_outputs = {}
-def _output(number, inactive):
-    pin = digitalio.DigitalInOut(_resolve_pin(number))
-    pin.switch_to_output(value=inactive)
-    _outputs[number] = pin
-    return pin
-
-def set_gpio(number, high):
-    _outputs[number].value = high
-
-`;
-    if (circuit.displayEnabled) code += `# Display common pin to ${circuit.common === 'cathode' ? 'GND' : '3.3V'}.
-# Segment resistors: ${circuit.resistors.join(', ')} ohms.
-_segment_names = ${JSON.stringify(SEGMENTS)}
-_gpio_numbers = ${JSON.stringify(circuit.pins)}
-_active = ${active}
-_segments = {}
-for _name, _gpio in zip(_segment_names, _gpio_numbers):
-    _segments[_name] = _output(_gpio, not _active)
-
-def set_segment(name, on):
-    _segments[name].value = _active if on else not _active
-
-def clear_display():
-    for name in _segment_names:
-        set_segment(name, False)
-
-def show_digit(digit):
-    patterns = ${JSON.stringify(DIGITS)}
-    pattern = patterns[int(digit) % 10]
-    for name in _segment_names:
-        set_segment(name, name in pattern)
-
-`;
-    if (circuit.leds.length) {
-        code += '_leds = {}\n';
-        for (const led of circuit.leds) {
-            code += `# ${led.id}: ${led.type}, GPIO ${led.pins.join(', ')}, ${led.type === 'onboard' ? 'built-in resistor' : 'resistors ' + led.resistors.join(', ') + ' ohms'}.\n`;
-            code += `_leds["${led.id}"] = ([${led.pins.map(pin => `_output(${pin}, ${led.activeLow ? 'True' : 'False'})`).join(', ')}], ${led.activeLow ? 'False' : 'True'})\n`;
-        }
-        code += `
-def set_led(name, on):
-    pins, active = _leds[name]
-    for pin in pins:
-        pin.value = active if on else not active
-
-def set_rgb(name, red, green, blue):
-    pins, active = _leds[name]
-    for pin, on in zip(pins, (red, green, blue)):
-        pin.value = active if on else not active
-
-`;
-    }
-    if (circuit.boot.enabled) code += `# BOOT is an active-low input. Release BOOT before resetting hardware.
-_boot_pin = digitalio.DigitalInOut(_resolve_pin(${circuit.boot.pin}))
-_boot_pin.switch_to_input(pull=digitalio.Pull.UP)
-${BUTTON_PYTHON}`;
-    code += `
-_counter = 0
-_mode = False
-_error = False
-def calculate(a, b):
-    try:
-        return a / b, False
-    except ZeroDivisionError:
-        return 0, True
-
-_blink_times = {}
-def toggle_led(name):
-    pins, active = _leds[name]
-    on = not (pins[0].value == active)
-    set_led(name, on)
-
-def blink_led(name, seconds):
-    now = time.monotonic()
-    previous = _blink_times.get(name)
-    if previous is None or now - previous >= seconds:
-        toggle_led(name)
-        _blink_times[name] = now
-
-`;
-    return code;
-}
-
 export function validateProgram(program, value) {
     const circuit = normalizeCircuit(value);
     validateCircuit(circuit);
     const leds = new Map(circuit.leds.map(led => [led.id, led]));
     const pins = new Set([...(circuit.displayEnabled ? circuit.pins : []), ...circuit.leds.flatMap(led => led.pins)]);
+    const inputs = new Set(), outputs = new Set(pins);
+    const validPin = pin => { if (!Number.isInteger(pin) || pin < 0 || pin > 48) throw new Error("GPIO numbers must be integers from 0 to 48."); };
     function condition(expression) {
         if (!expression) return;
         if (['pressed', 'edge', 'held'].includes(expression.type) && !circuit.boot.enabled) throw new Error('Enable the BOOT button input before using its blocks.');
+        if (expression.type === 'gpio_level') { validPin(expression.pin); inputs.add(expression.pin); }
         if (expression.input) condition(expression.input);
     }
     function visit(operations) {
@@ -156,18 +58,20 @@ export function validateProgram(program, value) {
                 if (!leds.has(op.id)) throw new Error(`Add LED "${op.id}" in Circuit components, or choose an existing LED in the block.`);
                 if (op.type === 'rgb' && leds.get(op.id).type !== 'rgb') throw new Error(`LED "${op.id}" is not an RGB LED.`);
             }
-            if (op.type === 'gpio' && !pins.has(op.pin)) throw new Error(`Connect an LED or display channel to GPIO ${op.pin} first.`);
+            if (op.type === 'gpio') { validPin(op.pin); outputs.add(op.pin); }
             condition(op.condition);
             if (op.body) visit(op.body);
             if (op.otherwise) visit(op.otherwise);
         }
     }
     visit(program);
+    if (circuit.boot.enabled) inputs.add(circuit.boot.pin);
+    for (const pin of inputs) if (outputs.has(pin)) throw new Error(`GPIO ${pin} cannot be both an input and an output.`);
 }
 
 // Interpret the supported block operations directly, without evaluating user code.
 // Every operation yields so even a wait-free forever loop remains stoppable.
-export async function simulate(program, { signal, render, wait, circuit: value = DEFAULT_CIRCUIT, readBoot = () => false, now = () => performance.now() / 1000, log = () => {} }) {
+export async function simulate(program, { signal, render, wait, circuit: value = DEFAULT_CIRCUIT, readBoot = () => false, readGpio = () => true, now = () => performance.now() / 1000, log = () => {} }) {
     const circuit = normalizeCircuit(value);
     validateProgram(program, circuit);
     let lit = new Set();
@@ -175,6 +79,7 @@ export async function simulate(program, { signal, render, wait, circuit: value =
     const button = new BootButton(readBoot, now), blinkTimes = new Map();
     function evaluate(expression) {
         switch (expression.type) {
+            case 'gpio_level': return Boolean(readGpio(expression.pin)) === expression.high;
             case 'pressed': return button.update();
             case 'edge': return button.newPress();
             case 'held': return button.held(expression.seconds);
@@ -189,6 +94,14 @@ export async function simulate(program, { signal, render, wait, circuit: value =
     const levels = new Map();
     if (circuit.displayEnabled) circuit.pins.forEach(pin => levels.set(pin, circuit.common === 'anode'));
     circuit.leds.forEach(led => led.pins.forEach(pin => levels.set(pin, led.activeLow)));
+    function initializeOutputs(operations) {
+        for (const op of operations) {
+            if (op.type === 'gpio' && !levels.has(op.pin)) levels.set(op.pin, false);
+            if (op.body) initializeOutputs(op.body);
+            if (op.otherwise) initializeOutputs(op.otherwise);
+        }
+    }
+    initializeOutputs(program);
     const setSegments = () => circuit.pins.forEach((pin, i) => levels.set(pin, lit.has(SEGMENTS[i]) !== (circuit.common === 'anode')));
     const ledOutput = () => new Map(circuit.leds.map(led => [led.id, led.pins.map(pin => levels.get(pin) !== led.activeLow)]));
     async function execute(operations) {
@@ -250,7 +163,7 @@ export async function simulate(program, { signal, render, wait, circuit: value =
                 default: throw new Error(`Unsupported simulation operation: ${operation.type}`);
             }
             if (signal.aborted) return;
-            render(new Set(lit), ledOutput(), { counter, mode, error, pressed: button.stable });
+            render(new Set(lit), ledOutput(), { counter, mode, error, pressed: button.stable, gpio: new Map(levels) });
             await wait(16, signal);
         }
     }

@@ -1,12 +1,10 @@
 import * as Blockly from 'blockly';
-import { pythonGenerator } from 'blockly/python';
-import { SEGMENTS, circuitPythonSetup, normalizeCircuit, validateProgram } from './model.js';
+import { SEGMENTS, normalizeCircuit } from './model.js';
 
-import { INPUT_BLOCKS, conditionFromBlock } from './input-blocks.js';
+import { addOnboardPinInput, syncWorkspacePins } from './block-pins.js';
+import { pythonForProgram } from './python.js';
+import { conditionFromBlock } from './input-blocks.js';
 
-pythonGenerator.INDENT = '    ';
-// Disconnected condition blocks are editor fragments, not executable statements.
-pythonGenerator.scrubNakedValue = () => '';
 
 Blockly.defineBlocksWithJsonArray([
     { type: 'esp_digit', message0: 'display digit %1', args0: [{ type: 'field_number', name: 'DIGIT', value: 0, min: 0, max: 9, precision: 1 }], previousStatement: null, nextStatement: null, colour: 285 },
@@ -31,15 +29,15 @@ for (const [type, label] of [['esp_led_toggle','toggle LED'],['esp_led_blink','b
         const input = this.appendDummyInput().appendField(label).appendField(new Blockly.FieldDropdown(ledMenu(false)), 'LED');
         this.getField('LED').setOptions(ledMenu(false));
         if (type === 'esp_led_blink') input.appendField('every').appendField(new Blockly.FieldNumber(0.5,0.01,3600,0.01),'SECONDS').appendField('seconds (without waiting)');
+        addOnboardPinInput(this);
         this.setPreviousStatement(true); this.setNextStatement(true); this.setColour(30);
     } };
 }
-pythonGenerator.forBlock.esp_led_toggle = block => `toggle_led(${JSON.stringify(block.getFieldValue('LED'))})\n`;
-pythonGenerator.forBlock.esp_led_blink = block => `blink_led(${JSON.stringify(block.getFieldValue('LED'))}, ${block.getFieldValue('SECONDS')})\n`;
 const onOptions = [['on', 'TRUE'], ['off', 'FALSE']];
 Blockly.Blocks.esp_led = { init() {
     this.appendDummyInput().appendField('turn LED').appendField(new Blockly.FieldDropdown(ledMenu(false)), 'LED').appendField(new Blockly.FieldDropdown(onOptions), 'ON');
     this.getField('LED').setOptions(ledMenu(false));
+    addOnboardPinInput(this);
     this.setPreviousStatement(true); this.setNextStatement(true); this.setColour(30);
 } };
 Blockly.Blocks.esp_rgb = { init() {
@@ -49,12 +47,11 @@ Blockly.Blocks.esp_rgb = { init() {
     this.setPreviousStatement(true); this.setNextStatement(true); this.setColour(330);
 } };
 Blockly.defineBlocksWithJsonArray([{type: 'esp_gpio', message0: 'set GPIO %1 %2', args0: [{type: 'field_number', name: 'PIN', value: 2, min: 0, max: 48, precision: 1}, {type: 'field_dropdown', name: 'HIGH', options: [['HIGH', 'TRUE'], ['LOW', 'FALSE']]}], previousStatement: null, nextStatement: null, colour: 30}]);
-const pythonBool = value => value === 'TRUE' ? 'True' : 'False';
-pythonGenerator.forBlock.esp_led = block => `set_led(${JSON.stringify(block.getFieldValue('LED'))}, ${pythonBool(block.getFieldValue('ON'))})\n`;
-pythonGenerator.forBlock.esp_rgb = block => `set_rgb(${JSON.stringify(block.getFieldValue('LED'))}, ${['RED', 'GREEN', 'BLUE'].map(name => pythonBool(block.getFieldValue(name))).join(', ')})\n`;
-pythonGenerator.forBlock.esp_gpio = block => `set_gpio(${block.getFieldValue('PIN')}, ${pythonBool(block.getFieldValue('HIGH'))})\n`;
 export function configureWorkspace(workspace, circuit) {
     workspace.ledCircuit = normalizeCircuit(circuit);
+    syncWorkspacePins(workspace);
+    const flyout = workspace.getFlyout?.()?.getWorkspace();
+    if(flyout) syncWorkspacePins(flyout);
 }
 export function refreshFlyoutLeds(workspace) {
     for (const block of workspace.getFlyout()?.getWorkspace().getAllBlocks(false) ?? []) {
@@ -62,26 +59,33 @@ export function refreshFlyoutLeds(workspace) {
             block.getField('LED').setOptions(ledMenu(block.type === 'esp_rgb'));
         }
     }
+    const flyout = workspace.getFlyout()?.getWorkspace();
+    if(flyout) syncWorkspacePins(flyout);
 }
 
-pythonGenerator.forBlock.esp_digit = block => `show_digit(${block.getFieldValue('DIGIT')})\n`;
-pythonGenerator.forBlock.esp_segment = block => `set_segment("${block.getFieldValue('SEGMENT')}", ${block.getFieldValue('ON') === 'TRUE' ? 'True' : 'False'})\n`;
-pythonGenerator.forBlock.esp_clear = () => 'clear_display()\n';
-pythonGenerator.forBlock.esp_wait = block => `time.sleep(${block.getFieldValue('SECONDS')})\n`;
-pythonGenerator.forBlock.esp_repeat = (block, generator) => `for _ in range(${block.getFieldValue('COUNT')}):\n${generator.statementToCode(block, 'DO') || '    pass\n'}`;
-pythonGenerator.forBlock.esp_forever = (block, generator) => `while True:\n${generator.statementToCode(block, 'DO') || '    pass\n'}    time.sleep(0.01)\n`;
 
-export const toolbox = { kind: 'flyoutToolbox', contents: ['esp_led', 'esp_led_toggle', 'esp_led_blink', 'esp_rgb', 'esp_gpio', 'esp_wait', 'esp_repeat', 'esp_forever', ...INPUT_BLOCKS, 'esp_digit', 'esp_segment', 'esp_clear'].map(type => ({ kind: 'block', type })) };
+const category = (name, colour, types) => ({kind:'category', name, colour, contents:types.map(type=>({kind:'block',type}))});
+export const toolbox = {kind:'categoryToolbox', contents:[
+    category('Logic', '210', ['esp_if','esp_not','esp_boolean']),
+    category('Loops', '120', ['esp_forever','esp_repeat','esp_repeat_counter']),
+    category('GPIO', '30', ['esp_gpio_level','esp_gpio']),
+    category('LEDs', '30', ['esp_led','esp_led_toggle','esp_led_blink','esp_rgb']),
+    category('Buttons', '210', ['esp_boot_pressed','esp_boot_edge','esp_boot_held']),
+    category('Timing', '180', ['esp_wait','esp_wait_counter']),
+    category('Variables', '330', ['esp_counter_set','esp_counter_change','esp_counter_test','esp_counter_print','esp_mode_set','esp_mode_toggle','esp_mode']),
+    category('Math', '230', ['esp_calculate','esp_error']),
+    category('Display', '285', ['esp_digit','esp_segment','esp_clear']),
+]};
 export const starter = { blocks: { languageVersion: 0, blocks: [{ type: 'esp_forever', x: 40, y: 40, inputs: { DO: { block: { type: 'esp_digit', fields: { DIGIT: 8 }, next: { block: { type: 'esp_wait', fields: { SECONDS: 1 }, next: { block: { type: 'esp_clear', next: { block: { type: 'esp_wait', fields: { SECONDS: 1 } } } } } } } } } } }] } };
 export function generatePython(workspace, circuit) {
-    validateProgram(programFromWorkspace(workspace), circuit);
-    return circuitPythonSetup(circuit) + pythonGenerator.workspaceToCode(workspace);
+    return pythonForProgram(programFromWorkspace(workspace), circuit);
 }
 export function programFromWorkspace(workspace) {
     function chain(block) {
         const operations = [];
         for (; block; block = block.getNextBlock()) {
             if (!block.isEnabled()) continue;
+            const start = operations.length;
             switch (block.type) {
                 case 'esp_wait_counter': operations.push({type:'wait_counter'}); break;
                 case 'esp_repeat_counter': operations.push({type:'repeat_counter',body:chain(block.getInputTargetBlock('DO'))}); break;
@@ -104,6 +108,17 @@ export function programFromWorkspace(workspace) {
                 case 'esp_repeat': operations.push({ type: 'repeat', count: Number(block.getFieldValue('COUNT')), body: chain(block.getInputTargetBlock('DO')) }); break;
                 case 'esp_forever': operations.push({ type: 'forever', body: chain(block.getInputTargetBlock('DO')) }); break;
                 default: throw new Error(`Unsupported block: ${block.type}`);
+            }
+            if (operations.length > start) {
+                const comments = [block.getCommentText()];
+                const collect = child => {
+                    if (!child) return;
+                    comments.push(child.getCommentText());
+                    for (const input of child.inputList) if (input.type === Blockly.inputs.inputTypes.VALUE) collect(input.connection?.targetBlock());
+                };
+                collect(block.getInputTargetBlock('CONDITION'));
+                const comment = comments.filter(Boolean).join('\n\n');
+                if (comment) operations.at(-1).comment = comment;
             }
         }
         return operations;

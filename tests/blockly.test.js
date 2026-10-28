@@ -15,9 +15,10 @@ test('starter project round-trips and generates hardware Python', () => {
         Blockly.serialization.workspaces.load(saved, restored);
         assert.deepEqual(programFromWorkspace(restored), [{ type: 'forever', body: [{ type: 'digit', value: 8 }, { type: 'wait', seconds: 1 }, { type: 'clear' }, { type: 'wait', seconds: 1 }] }]);
         const code = generatePython(restored, DEFAULT_CIRCUIT);
-        assert.match(code, /while True:\n    show_digit\(8\)\n    time.sleep\(1\)\n    clear_display\(\)\n    time.sleep\(1\)/);
-        assert.match(code, /_active = True/);
-        assert.match(generatePython(restored, { ...DEFAULT_CIRCUIT, common: 'anode' }), /_active = False/);
+        assert.match(code, /while True:\n    show_digit\(8\)\n    time.sleep\(1\)/);
+        assert.match(code, /_segment_dp.value = False/);
+        assert.match(code, /_segment_a.switch_to_output\(value=False\)/);
+        assert.match(generatePython(restored, { ...DEFAULT_CIRCUIT, common: 'anode' }), /_segment_a.switch_to_output\(value=True\)/);
         assert.match(code, /GPIO.*str\(number\)/);
     } finally { workspace.dispose(); restored.dispose(); }
 });
@@ -50,8 +51,9 @@ test('forever with no wait can be stopped', async () => {
 });
 
 import { configureWorkspace } from '../js/blockly/blocks.js';
-import { normalizeCircuit, validateProgram, circuitPythonSetup } from '../js/blockly/model.js';
+import { normalizeCircuit, validateProgram } from '../js/blockly/model.js';
 import { lessonPreset, makeLed } from '../js/blockly/presets.js';
+import { pythonForProgram } from '../js/blockly/python.js';
 import { spawnSync } from 'node:child_process';
 
 test('onboard, multiple and RGB lessons round-trip with their component selections', () => {
@@ -66,7 +68,7 @@ test('onboard, multiple and RGB lessons round-trip with their component selectio
             assert.deepEqual(programFromWorkspace(restored), programFromWorkspace(workspace));
             const code = generatePython(restored, preset.circuit);
             assert.ok(!code.includes('_segment_names ='), 'LED-only lessons do not allocate display GPIOs');
-            assert.match(code, kind === 'rgb' ? /set_rgb\("rgb1", True, False, False\)/ : /set_led\("led1", True\)/);
+            assert.match(code, kind === 'rgb' ? /rgb1_red.value = True/ : /led1.value = True/);
         } finally { workspace.dispose(); restored.dispose(); }
     }
 });
@@ -85,7 +87,7 @@ test('validates collisions across display and LEDs, RGB channels, and missing ta
     assert.throws(() => validateCircuit({...normalizeCircuit(DEFAULT_CIRCUIT), leds:[makeLed('led1','single',[18])]}), /different GPIO/);
     assert.throws(() => validateProgram([{type:'led',id:'missing',on:true}],circuit), /Add LED/);
     assert.throws(() => validateProgram([{type:'rgb',id:'led1',values:[true,true,true]}],circuit), /not an RGB/);
-    assert.throws(() => validateProgram([{type:'gpio',pin:2,high:true}],circuit), /Connect an LED/);
+    assert.doesNotThrow(() => validateProgram([{type:'gpio',pin:2,high:true}],circuit));
     assert.throws(() => validateProgram([{type:'digit',value:1}],circuit), /Enable the seven/);
     assert.throws(() => validateCircuit({...circuit, leds:[makeLed('led1','rgb',[1,1,2])]}), /different GPIO/);
 });
@@ -122,18 +124,13 @@ class Output:
 sys.modules['board'] = types.SimpleNamespace(IO33=33, IO25=25)
 sys.modules['microcontroller'] = types.SimpleNamespace(pin=types.SimpleNamespace(GPIO4=4, GPIO5=5, GPIO16=16))
 sys.modules['digitalio'] = types.SimpleNamespace(DigitalInOut=Output)
-${circuitPythonSetup(circuit)}
+${pythonForProgram([
+{type:'led',id:'led1',on:true},{type:'led',id:'led2',on:true},
+{type:'rgb',id:'rgb1',values:[true,false,true]},{type:'gpio',pin:5,high:false},
+{type:'led',id:'led1',on:false}],circuit)}
 assert len(created) == 5
-assert created[33].value is False and created[4].value is True
-set_led('led1', True)
-set_led('led2', True)
-assert created[33].value is True and created[25].value is True
-set_rgb('rgb1', True, False, True)
-assert [created[p].value for p in (4,5,16)] == [False, True, False]
-set_gpio(5, False)
-assert created[5].value is False
-set_led('led1', False)
-assert created[33].value is False
+assert created[33].value is False and created[25].value is True
+assert [created[p].value for p in (4,5,16)] == [False, False, False]
 `;
     const result = spawnSync('python3', ['-c', script], {encoding:'utf8'});
     assert.equal(result.status, 0, result.stderr || result.error?.message);

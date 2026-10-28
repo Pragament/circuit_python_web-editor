@@ -74,7 +74,7 @@ Run `npm test` (Node.js and Python 3) for Blockly serialization, Python generati
 
 ### BOOT input and condition lessons
 
-The example selector includes the five BOOT projects: button-controlled LED, a two-second long-press detector, press-to-start blinking, a press counter, and a two-mode LED (steady/blinking). Additional examples cover toggle-on-press, LED-on-while-released, and blink-while-held. The catalogue contains 25 onboard-LED-only examples, eight BOOT examples and three external-component examples, for 36 examples total.
+The example selector includes the five BOOT projects: button-controlled LED, a two-second long-press detector, press-to-start blinking, a press counter, and a two-mode LED (steady/blinking). Additional examples cover toggle-on-press, LED-on-while-released, and blink-while-held. The catalogue contains 25 onboard-LED-only examples, eight BOOT examples and three external-component examples, plus one minimal GPIO example, for 37 examples total.
 
 BOOT defaults to GPIO0, active LOW, using `digitalio.Pull.UP`; the onboard LED defaults to GPIO2. Both pins can be changed for the actual board. Enable BOOT input in Circuit components when building a custom project. Its GPIO cannot also drive an LED or display. BOOT pin assignments vary by ESP32 variant. Release BOOT before resetting the real ESP32: holding GPIO0 LOW at reset can select the ROM download bootloader ([Espressif boot-mode documentation](https://docs.espressif.com/projects/esptool/en/latest/esp32/advanced-topics/boot-mode-selection.html)).
 
@@ -94,3 +94,15 @@ The group includes LED ON, LED OFF, continuous/fast/slow blinking, triple/double
 The calculation task block divides its numeric operands, stores the result in the counter and catches a real `ZeroDivisionError` in generated Python. **Calculation error occurred** exposes that result as a condition. Error Pattern intentionally calculates `10 / 0` and flashes its error pattern; changing the divisor to `2` clears the error and holds the LED on. Completion and activity examples perform and print a valid calculation before indicating completion/activity; they do not depend on external sensors or a button.
 
 The simulator's program-state panel shows counter, mode, calculation error and printed output for LED-only projects too. Restarting simulation resets all program state. The same blocks generate executable CircuitPython for the existing Save + Run workflow.
+
+### Focused Python previews and pins on blocks
+
+Generated Python includes only imports, GPIO allocations, variables and helpers used by the executable blocks. LED ON/OFF examples have direct LED assignments, blinking adds the needed timing, and BOOT examples include only the relevant debouncing/edge/hold helpers. Unused configured components and loose condition blocks do not add Python code or initialize hardware pins. GPIO lookup retains a `board.IO…` / `microcontroller.pin.GPIO…` fallback for ESP32 board variants.
+
+Onboard LED on/off, toggle and blink blocks include an editable **onboard GPIO** field. BOOT pressed/new-press/held blocks include their own editable **BOOT GPIO** field. Editing one field changes the wiring for that shared onboard component and synchronizes its other blocks, the side panel, simulator and generated Python. Side-panel changes synchronize back to the block fields too. Pins are stored with the project. Existing projects acquire these fields from their saved circuit configuration. Conflicting input/output pin assignments are rejected; the previous valid wiring is kept.
+
+The **Minimal GPIO · if input → set output** example uses generic forever and if blocks, a reusable GPIO HIGH/LOW condition, and a set GPIO HIGH/LOW block. Edit both pin numbers and levels directly in the blocks. The simulator provides an input level selector and output level readout. Inputs use an internal pull-up; outputs start LOW and keep their previous level when the condition is false. Generated CircuitPython uses only the selected pins and the loop/condition, without BOOT debounce helpers.
+
+All 37 examples include editable Blockly comments. Click a block’s comment icon to read its explanation; the first block also describes the example algorithm at its initial settings. These comments appear beside the corresponding statements in generated Python and survive downloading and reopening the blocks. Python also explains pin setup and any required timing or input helpers.
+
+The Blockly toolbox groups blocks into Logic, Loops, GPIO, LEDs, Buttons, Timing, Variables, Math, and Display. Each block appears in one category; LED selections and onboard/BOOT pins follow the current circuit when opening a category.

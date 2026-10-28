@@ -13,9 +13,9 @@ function load(kind) {
     Blockly.serialization.workspaces.load(preset.workspace,workspace);
     return {...preset,workspace,program:programFromWorkspace(workspace)};
 }
-test('all 36 examples round-trip, validate and generate syntactically valid CircuitPython', () => {
+test('all 37 examples round-trip, validate and generate syntactically valid CircuitPython', () => {
     const sources = [];
-    assert.equal(LESSONS.length,36);
+    assert.equal(LESSONS.length,37);
     for (const [kind] of LESSONS) {
         const lesson=load(kind), restored=new Blockly.Workspace();
         try {
@@ -25,7 +25,7 @@ test('all 36 examples round-trip, validate and generate syntactically valid Circ
             validateProgram(lesson.program,lesson.circuit);
             const source=generatePython(restored,lesson.circuit);
             if (kind.startsWith('button-')) {
-                assert.match(source,/_boot_pin.switch_to_input\(pull=digitalio.Pull.UP\)/);
+                assert.match(source,/_boot_button.switch_to_input\(pull=digitalio.Pull.UP\)/);
                 assert.match(source,/if /);
             }
             sources.push(source);
